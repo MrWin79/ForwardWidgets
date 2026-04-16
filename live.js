@@ -55,7 +55,7 @@ WidgetMetadata = {
   version: "1.0.0",
   requiredVersion: "0.0.1",
   description: "极简电视直播插件，仅保留订阅链接播放和自定义 UA 功能",
-  author: "huangxd & Copilot",
+  author: "Win",
   site: "https://github.com/MrWin79/ForwardWidgets"
 };
 

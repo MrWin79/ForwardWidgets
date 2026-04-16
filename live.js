@@ -1,20 +1,21 @@
-// TVlive 极简版电视直播插件
-// 功能说明：
-// 1. 输入一个 M3U 订阅链接
-// 2. 可选输入自定义 User-Agent
-// 3. 解析频道列表并直接播放
-// 4. 不包含分组、过滤、台标、背景色、方向等额外功能
+code = r'''// TVlive-debug.js
+// 说明：
+// 1. 输入 M3U 订阅链接
+// 2. 支持自定义 User-Agent
+// 3. 支持自定义 Referer（可关闭）
+// 4. 支持调试日志，方便排查 "APT V 能播，Forward 不能播" 这类问题
+// 5. 仅保留核心播放能力，不做分组、台标、过滤等额外功能
 
 WidgetMetadata = {
-  id: "TVlive", // 插件唯一 ID
-  title: "TVlive", // 插件名称
-  detailCacheDuration: 60, // 详情缓存时长（秒）
+  id: "TVlive",
+  title: "TVlive-debug",
+  detailCacheDuration: 60,
   modules: [
     {
-      title: "TVlive",
-      requiresWebView: false, // 不需要网页视图
-      functionName: "loadTVLiveItems", // 列表加载函数
-      cacheDuration: 21600, // 列表缓存时长（6小时）
+      title: "TVlive-debug",
+      requiresWebView: false,
+      functionName: "loadTVLiveItems",
+      cacheDuration: 21600,
       params: [
         {
           name: "url",
@@ -32,12 +33,16 @@ WidgetMetadata = {
           name: "user_agent",
           title: "自定义 User-Agent（选填）",
           type: "input",
-          description: "留空则使用默认 TVlive/1.0.0；直接填写 UA 字符串本体即可",
-          value: "TVlive/1.0.0",
+          description: "留空则使用默认 TVlive-debug/1.0.0；直接填写 UA 字符串本体即可",
+          value: "TVlive-debug/1.0.0",
           placeholders: [
             {
               title: "默认",
-              value: "TVlive/1.0.0"
+              value: "TVlive-debug/1.0.0"
+            },
+            {
+              title: "APT V / okHttp",
+              value: "okHttp/Mod-1.5.0.0"
             },
             {
               title: "iPhone Safari",
@@ -48,28 +53,73 @@ WidgetMetadata = {
               value: "VLC/3.0.20 LibVLC/3.0.20"
             }
           ]
+        },
+        {
+          name: "referer",
+          title: "自定义 Referer（选填）",
+          type: "input",
+          description: "某些源除 UA 外还会校验 Referer；留空则默认不传自定义 Referer",
+          value: "",
+          placeholders: [
+            {
+              title: "不填写",
+              value: ""
+            },
+            {
+              title: "示例主页",
+              value: "https://example.com/"
+            }
+          ]
+        },
+        {
+          name: "disable_referer",
+          title: "是否禁用 Referer",
+          type: "enumeration",
+          description: "默认禁用，避免错误 Referer 反而导致播放失败",
+          value: "true",
+          enumOptions: [
+            { title: "禁用 Referer（推荐）", value: "true" },
+            { title: "启用 Referer", value: "false" }
+          ]
+        },
+        {
+          name: "debug_mode",
+          title: "调试日志",
+          type: "enumeration",
+          description: "开启后会输出更多日志，方便排查问题",
+          value: "true",
+          enumOptions: [
+            { title: "开启", value: "true" },
+            { title: "关闭", value: "false" }
+          ]
         }
       ]
     }
   ],
   version: "1.0.0",
   requiredVersion: "0.0.1",
-  description: "极简电视直播插件，仅保留订阅链接播放和自定义 UA 功能",
-  author: "Win",
+  description: "极简调试版电视直播插件：支持自定义 UA / Referer / 调试日志",
+  author: "huangxd & Copilot",
   site: "https://github.com/MrWin79/ForwardWidgets"
 };
 
 // 默认 User-Agent
-const DEFAULT_USER_AGENT = "TVlive/1.0.0";
+const DEFAULT_USER_AGENT = "TVlive-debug/1.0.0";
 
-// 当前使用的 User-Agent
-// 这里用一个全局变量保存，方便在 loadDetail() 播放时继续复用
+// 使用全局变量保存当前会话的配置，方便在 loadDetail() 中继续使用
 let CURRENT_USER_AGENT = DEFAULT_USER_AGENT;
+let CURRENT_REFERER = "";
+let CURRENT_DISABLE_REFERER = true;
+let CURRENT_DEBUG_MODE = true;
+
+function debugLog(...args) {
+  if (CURRENT_DEBUG_MODE) {
+    console.log(...args);
+  }
+}
 
 /**
  * 规范化 User-Agent
- * - 如果用户没有填，自动回退到默认值
- * - 只接收纯字符串，不做复杂解析
  */
 function normalizeUserAgent(ua) {
   const value = String(ua || "").trim();
@@ -77,97 +127,115 @@ function normalizeUserAgent(ua) {
 }
 
 /**
- * 主入口函数
- * 功能：
- * 1. 读取订阅链接和自定义 UA
- * 2. 拉取 M3U 内容
- * 3. 解析为频道列表
- * 4. 返回给 Forward 展示
+ * 规范化 Referer
+ */
+function normalizeReferer(referer) {
+  return String(referer || "").trim();
+}
+
+/**
+ * 将枚举字符串转为布尔值
+ */
+function toBool(value, defaultValue = false) {
+  const text = String(value == null ? "" : value).trim().toLowerCase();
+  if (text === "true") return true;
+  if (text === "false") return false;
+  return defaultValue;
+}
+
+/**
+ * 主入口
+ * 1. 读取参数
+ * 2. 拉取 M3U
+ * 3. 解析频道列表
  */
 async function loadTVLiveItems(params = {}) {
   try {
-    // 读取参数
     const url = String(params.url || "").trim();
     const userAgent = normalizeUserAgent(params.user_agent);
+    const referer = normalizeReferer(params.referer);
+    const disableReferer = toBool(params.disable_referer, true);
+    const debugMode = toBool(params.debug_mode, true);
 
-    // 记录当前 UA，供 loadDetail() 播放时使用
+    // 保存到全局，供 loadDetail() 使用
     CURRENT_USER_AGENT = userAgent;
+    CURRENT_REFERER = referer;
+    CURRENT_DISABLE_REFERER = disableReferer;
+    CURRENT_DEBUG_MODE = debugMode;
 
-    // 必填校验：必须有订阅链接
     if (!url) {
       throw new Error("必须提供电视直播订阅链接");
     }
 
-    // 拉取 M3U 文件内容
-    const m3uContent = await fetchM3UContent(url, userAgent);
+    debugLog("[TVlive-debug] 订阅链接:", url);
+    debugLog("[TVlive-debug] 拉取 M3U 的 User-Agent:", CURRENT_USER_AGENT);
+    debugLog("[TVlive-debug] 自定义 Referer:", CURRENT_REFERER || "<空>");
+    debugLog("[TVlive-debug] 是否禁用 Referer:", CURRENT_DISABLE_REFERER);
+
+    const m3uContent = await fetchM3UContent(url, CURRENT_USER_AGENT, CURRENT_REFERER, CURRENT_DISABLE_REFERER);
     if (!m3uContent) return [];
 
-    // 解析频道列表
     const items = parseM3UContent(m3uContent);
+    debugLog("[TVlive-debug] 解析出的频道数量:", items.length);
 
-    // 返回频道列表
     return items;
   } catch (error) {
-    console.error(`解析电视直播链接时出错: ${error.message}`);
+    console.error(`[TVlive-debug] 解析电视直播链接时出错: ${error.message}`);
     return [];
   }
 }
 
 /**
  * 拉取 M3U 内容
- * @param {string} url - 订阅链接
- * @param {string} userAgent - 自定义 User-Agent
- * @returns {string|null} - 成功返回 M3U 文本，失败返回 null
  */
-async function fetchM3UContent(url, userAgent = DEFAULT_USER_AGENT) {
+async function fetchM3UContent(url, userAgent = DEFAULT_USER_AGENT, referer = "", disableReferer = true) {
   try {
-    const response = await Widget.http.get(url, {
-      headers: {
-        "User-Agent": normalizeUserAgent(userAgent)
-      }
-    });
+    const headers = {
+      "User-Agent": normalizeUserAgent(userAgent)
+    };
 
-    // Forward 返回的数据一般在 response.data 中
+    if (!disableReferer && normalizeReferer(referer)) {
+      headers["Referer"] = normalizeReferer(referer);
+    }
+
+    debugLog("[TVlive-debug] 请求 M3U 使用的 headers:", JSON.stringify(headers));
+
+    const response = await Widget.http.get(url, { headers });
     const data = typeof response?.data === "string" ? response.data : "";
 
-    // 简单判断：M3U 通常包含 #EXTINF
+    debugLog("[TVlive-debug] M3U 响应长度:", data.length);
+
     if (data && data.includes("#EXTINF")) {
       return data;
     }
 
+    debugLog("[TVlive-debug] 返回内容不包含 #EXTINF，可能不是有效的 M3U");
     return null;
   } catch (error) {
-    console.error(`获取 M3U 内容时出错: ${error.message}`);
+    console.error(`[TVlive-debug] 获取 M3U 内容时出错: ${error.message}`);
     return null;
   }
 }
 
 /**
- * 解析 M3U 内容
- * 这里只保留最核心的逻辑：
- * - 读取 #EXTINF 行中的频道名称
- * - 读取下一行的播放地址
- * - 生成最简可播放条目
- *
- * @param {string} content - M3U 文件文本
- * @returns {Array} - 频道列表
+ * 解析 M3U
+ * 仅保留最核心逻辑：
+ * - #EXTINF 行提取频道名称
+ * - 下一行提取播放地址
  */
 function parseM3UContent(content) {
   if (!content || !String(content).trim()) return [];
 
   const lines = String(content).split(/\r?\n/);
   const items = [];
+  const seen = new Set();
   let currentTitle = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = String(lines[i] || "").trim();
 
-    // 跳过空行和 M3U 文件头
     if (!line || line.startsWith("#EXTM3U")) continue;
 
-    // 解析频道标题
-    // M3U 典型格式：
-    // #EXTINF:-1,频道名称
     if (line.startsWith("#EXTINF:")) {
       const commaIndex = line.indexOf(",");
       currentTitle = commaIndex !== -1
@@ -176,18 +244,18 @@ function parseM3UContent(content) {
       continue;
     }
 
-    // 如果当前已经读到频道名，而这一行又不是注释，
-    // 那通常它就是该频道的播放地址
     if (currentTitle && !line.startsWith("#")) {
-      items.push({
-        id: line,              // 用播放地址作为唯一 ID
-        type: "url",           // Forward 可直接识别的 URL 类型
-        title: currentTitle,   // 频道名称
-        link: line,            // 播放地址
-        playerType: "system"   // 使用系统播放器
-      });
-
-      // 重置，继续解析下一个频道
+      // 以 link 去重，避免源里有重复项
+      if (!seen.has(line)) {
+        items.push({
+          id: line,
+          type: "url",
+          title: currentTitle,
+          link: line,
+          playerType: "system"
+        });
+        seen.add(line);
+      }
       currentTitle = null;
     }
   }
@@ -196,25 +264,33 @@ function parseM3UContent(content) {
 }
 
 /**
- * 频道详情页 / 播放入口
- * Forward 点击条目后会进入这里
- *
- * 这里直接返回 videoUrl 即可播放
- * 同时把自定义 User-Agent 一并带上
- *
- * @param {string} link - 播放地址
- * @returns {Object} - 播放详情对象
+ * 进入播放时返回播放对象
+ * 这里尽量减少干扰：
+ * - 默认只传 User-Agent
+ * - Referer 默认禁用，只有明确开启且填写时才传
  */
 async function loadDetail(link) {
+  const headers = {
+    "User-Agent": CURRENT_USER_AGENT
+  };
+
+  if (!CURRENT_DISABLE_REFERER && normalizeReferer(CURRENT_REFERER)) {
+    headers["Referer"] = normalizeReferer(CURRENT_REFERER);
+  }
+
+  debugLog("[TVlive-debug] 播放地址:", link);
+  debugLog("[TVlive-debug] 播放使用的 headers:", JSON.stringify(headers));
+
   return {
     id: link,
     type: "detail",
     videoUrl: link,
-    customHeaders: {
-      "Referer": link,
-      "User-Agent": CURRENT_USER_AGENT
-    },
+    customHeaders: headers,
     playerType: "system",
     childItems: []
   };
 }
+'''
+with open('/mnt/data/TVlive-debug.js', 'w', encoding='utf-8') as f:
+    f.write(code)
+print('written', len(code))

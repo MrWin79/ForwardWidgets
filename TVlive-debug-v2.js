@@ -93,7 +93,7 @@ WidgetMetadata = {
   version: "2.0.0",
   requiredVersion: "0.0.1",
   description: "极简调试版电视直播插件 v2：支持频道级 EXTVLCOPT 请求头解析",
-  author: "huangxd & Copilot",
+  author: "Win",
   site: "https://github.com/MrWin79/ForwardWidgets"
 };
 

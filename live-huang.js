@@ -280,7 +280,7 @@ async function fetchM3UContent(url) {
     try {
         const response = await Widget.http.get(url, {
             headers: {
-                'User-Agent': 'AptvPlayer/1.4.6',
+                'User-Agent': 'okHttp/Mod-1.5.0.0',
             }
         });
 
@@ -431,7 +431,7 @@ async function loadDetail(link) {
     //
     //     const response = await Widget.http.get(url, {
     //         headers: {
-    //             "User-Agent": "AptvPlayer/1.4.6",
+    //             "User-Agent": "okHttp/Mod-1.5.0.0",
     //         },
     //     });
     //
@@ -461,7 +461,7 @@ async function loadDetail(link) {
         videoUrl: videoUrl,
         customHeaders: {
             "Referer": link,
-            "User-Agent": "AptvPlayer/1.4.6",
+            "User-Agent": "okHttp/Mod-1.5.0.0",
         },
         playerType: "system",
         childItems: childItems,

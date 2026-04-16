@@ -41,7 +41,7 @@ WidgetMetadata = {
               value: "TVlive-debug/1.0.0"
             },
             {
-              title: "APT V / okHttp",
+              title: "APTV / okHttp",
               value: "okHttp/Mod-1.5.0.0"
             },
             {

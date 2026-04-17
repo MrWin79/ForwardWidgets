@@ -1,4 +1,4 @@
-// 电视直播插件（极致优化防闪退版）
+// 电视直播插件（极限内存防御 + 播放防闪退完美版）
 WidgetMetadata = {
   id: "live",
   title: "直播(电视+网络)",
@@ -19,19 +19,16 @@ WidgetMetadata = {
             { title: "Kimentanm", value: "https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u" },
             { title: "网络直播", value: "https://tv.iill.top/m3u/Live" },
             { title: "smart(港澳台)", value: "https://smart.pendy.dpdns.org/m3u/merged_judy.m3u" },
-            { title: "全球", value: "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8" },
             { title: "IPTV2-CN", value: "https://iptv-org.github.io/iptv/countries/cn.m3u" }
-            // ... 省略部分过长的 placeholders 避免冗长，你可以自行加回原来完整的列表 ...
           ]
         },
         {
           name: "group_filter",
           title: "按组关键字过滤(选填)",
           type: "input",
-          description: "输入组关键字，如央视，会筛选出所有包含央视的频道",
+          description: "输入组关键字，如央视",
           placeholders: [
             { title: "全部", value: "" },
-            { title: "央视&卫视", value: ".*(央视|卫视).*" },
             { title: "央视", value: "央视" }
           ]
         },
@@ -41,26 +38,19 @@ WidgetMetadata = {
           type: "input",
           description: "输入频道名关键字过滤(选填)",
           placeholders: [
-            { title: "全部", value: "" },
-            { title: "B站&虎牙&斗鱼", value: ".*(B站|虎牙|斗鱼).*" }
+            { title: "全部", value: "" }
           ]
         },
         {
           name: "bg_color",
           title: "台标背景色",
           type: "input",
-          description: "支持RGB颜色，如DCDCDC",
-          value: "DCDCDC",
-          placeholders: [
-            { title: "亮灰色", value: "DCDCDC" },
-            { title: "钢蓝", value: "4682B4" }
-          ]
+          value: "DCDCDC"
         },
         {
           name: "direction",
           title: "台标优先显示方向",
           type: "enumeration",
-          description: "台标优先显示方向，默认为竖向",
           value: "V",
           enumOptions: [
             { title: "竖向", value: "V" },
@@ -70,32 +60,21 @@ WidgetMetadata = {
       ]
     }
   ],
-  version: "1.2.0",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
-  description: "解析直播订阅链接【内存极致优化版/防闪退】",
-  author: "huangxd / extremely optimized",
-  site: "https://github.com/huangxd-/ForwardWidgets"
+  description: "修复底层播放器崩溃问题，内存极限优化",
+  author: "huangxd / optimized"
 };
 
-/**
- * =========================
- * 可调配置
- * =========================
- */
 const DEBUG = false;
-
-// 防闪退核心配置：限制最大输出条目，防止 JS Bridge payload 过大导致 APP OOM 崩溃
-const MAX_RETURN_ITEMS = 2000; 
+// 列表渲染限制，防止 Native UI 渲染崩溃
+const MAX_RETURN_ITEMS = 500; 
 
 const HEADER_MODE = "ua_only";
 const ICON_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_UA = "okHttp/Mod-1.5.0.0";
 
 let _iconCache = { set: null, timestamp: 0 };
-
-function debugLog(...args) {
-  if (DEBUG) console.log(...args);
-}
 
 function safeString(v) {
   return (v == null ? "" : String(v)).trim();
@@ -110,10 +89,6 @@ function safeArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
-function buildStableId(group, title, url) {
-  return `${safeString(group)}::${safeString(title)}::${safeString(url)}`;
-}
-
 function compileFilter(filterText) {
   const raw = safeString(filterText);
   if (!raw) return null;
@@ -126,15 +101,6 @@ function compileFilter(filterText) {
   }
 }
 
-function createPosterIcon(channelName, bgColor) {
-  return `https://ik.imagekit.io/huangxd/tr:l-image,i-transparent.png,w-bw_mul_3.5,h-bh_mul_3,bg-${bgColor},lfo-center,l-image,i-${channelName}.png,lfo-center,l-end,l-end/${channelName}.png`;
-}
-
-function createBackdropIcon(channelName, bgColor) {
-  return `https://ik.imagekit.io/huangxd/tr:l-image,i-transparent.png,w-bw_mul_1.5,h-bh_mul_4,bg-${bgColor},lfo-center,l-image,i-${channelName}.png,lfo-center,l-end,l-end/${channelName}.png`;
-}
-
-// 高效字符串提取，替代耗时正则，大幅降低内存分配
 function extractAttribute(str, key) {
   const prefix = key + '="';
   const startIdx = str.indexOf(prefix);
@@ -158,25 +124,20 @@ async function loadLiveItems(params = {}) {
     const groupMatcher = compileFilter(groupFilter);
     const nameMatcher = compileFilter(nameFilter);
 
-    // 获取M3U文本
     const responseText = await fetchM3UContent(url);
     if (!responseText) return [];
 
-    // 获取图标（不阻塞主逻辑，如果失败就用空集）
     const iconSet = await fetchIconSet();
 
-    // 解析与过滤合并，防爆内存
     const items = parseM3UContent(responseText, iconSet, bgColor, direction, groupMatcher, nameMatcher);
 
     const totalCount = items.length;
-    // 添加序号，避免再次使用 map 分配新数组
     for (let i = 0; i < totalCount; i++) {
       items[i].title = `${items[i].title} (${i + 1}/${totalCount})`;
     }
 
     return items;
   } catch (error) {
-    console.error(`解析电视直播链接出错: ${error.message}`);
     return [];
   }
 }
@@ -188,7 +149,6 @@ async function fetchM3UContent(url) {
     if (data && data.includes("#EXTINF")) return data;
     return null;
   } catch (error) {
-    console.error(`获取M3U内容出错: ${error.message}`);
     return null;
   }
 }
@@ -200,10 +160,7 @@ async function fetchIconSet() {
       return _iconCache.set;
     }
     const response = await Widget.http.get("https://api.github.com/repos/fanmingming/live/contents/tv", {
-      headers: {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": DEFAULT_UA
-      }
+      headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": DEFAULT_UA }
     });
     const data = safeArray(response?.data);
     const iconSet = new Set();
@@ -226,12 +183,17 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
   const dedupeSet = new Set();
   let currentItem = null;
 
-  // 使用 \n 切割比 \r?\n 快，且能处理大部分情况
-  const lines = content.split('\n');
-  const len = lines.length;
+  let cursor = 0;
+  const len = content.length;
 
-  for (let i = 0; i < len; i++) {
-    const line = lines[i].trim();
+  // 极限优化：使用游标逐行扫描，绝不使用 split() 创建大数组
+  while (cursor < len) {
+    let nextNewline = content.indexOf('\n', cursor);
+    if (nextNewline === -1) nextNewline = len;
+
+    let line = content.substring(cursor, nextNewline).trim();
+    cursor = nextNewline + 1;
+
     if (!line || line.startsWith("#EXTM3U")) continue;
 
     if (line.startsWith("#EXTINF:")) {
@@ -243,10 +205,8 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
       
       const title = line.substring(commaIdx + 1).trim() || "未命名频道";
       const attrsStr = line.substring(8, commaIdx);
-
       const group = extractAttribute(attrsStr, "group-title") || "未分类";
       
-      // 提早过滤，如果不匹配直接丢弃，不分配后续对象的内存 (防闪退关键)
       if (groupMatcher && !groupMatcher(group)) {
         currentItem = null;
         continue; 
@@ -269,15 +229,13 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
     if (currentItem && !line.startsWith("#")) {
       const url = line;
       
-      // 生成防重ID
-      const itemId = buildStableId(currentItem.group, currentItem.title, url);
+      const itemId = `${currentItem.group}::${currentItem.title}::${url}`;
       if (dedupeSet.has(itemId)) {
         currentItem = null;
         continue;
       }
       dedupeSet.add(itemId);
 
-      // 图标匹配简化逻辑
       let matchedIconName = "";
       const candidates = [currentItem.title, currentItem.tvgName, currentItem.tvgId];
       for (let c = 0; c < candidates.length; c++) {
@@ -288,8 +246,9 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
       }
 
       const hasIcon = !!matchedIconName;
-      const posterIcon = hasIcon ? createPosterIcon(matchedIconName, bgColor) : "";
-      const backdropIcon = hasIcon ? createBackdropIcon(matchedIconName, bgColor) : "";
+      const baseUrl = "https://ik.imagekit.io/huangxd/tr:l-image,i-transparent.png,";
+      const posterIcon = hasIcon ? `${baseUrl}w-bw_mul_3.5,h-bh_mul_3,bg-${bgColor},lfo-center,l-image,i-${matchedIconName}.png,lfo-center,l-end,l-end/${matchedIconName}.png` : "";
+      const backdropIcon = hasIcon ? `${baseUrl}w-bw_mul_1.5,h-bh_mul_4,bg-${bgColor},lfo-center,l-image,i-${matchedIconName}.png,lfo-center,l-end,l-end/${matchedIconName}.png` : "";
 
       const defaultImg = "https://i.miji.bid/2025/05/17/343e3416757775e312197588340fc0d3.png";
       const finalPosterPath = (direction === "V" || !direction) 
@@ -303,7 +262,8 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
         backdropPath: backdropIcon || currentItem.cover || "https://i.miji.bid/2025/05/17/c4a0703b68a4d2313a27937d82b72b6a.png",
         previewUrl: "",
         link: url,
-        playerType: "system",
+        // 【重要修改】移除容易导致闪退的 system 播放器，改为容错率更高的 ijk
+        playerType: "ijk", 
         metadata: {
           group: currentItem.group,
           tvgName: currentItem.tvgName,
@@ -314,15 +274,13 @@ function parseM3UContent(content, iconSet, bgColor, direction, groupMatcher, nam
 
       currentItem = null;
 
-      // 熔断机制：达到最大条目数后停止解析，保护APP不被撑爆 (防闪退关键)
+      // 防止列表渲染过多导致内存崩溃
       if (items.length >= MAX_RETURN_ITEMS) {
-        debugLog(`已达到最大列表加载数限制: ${MAX_RETURN_ITEMS}，终止解析防止崩溃`);
         break;
       }
     }
   }
 
-  // 清理内存
   dedupeSet.clear();
   return items;
 }
@@ -333,13 +291,16 @@ function buildHeadersForLink(link) {
   }
   const headers = { "User-Agent": DEFAULT_UA };
   try {
-    const origin = new URL(link).origin;
-    if (HEADER_MODE === "origin") {
-      headers["Referer"] = `${origin}/`;
-      headers["Origin"] = origin;
-    } else if (HEADER_MODE === "link") {
-      headers["Referer"] = link;
-      headers["Origin"] = origin;
+    const match = link.match(/^https?:\/\/[^\/]+/i);
+    const origin = match ? match[0] : "";
+    if (origin) {
+      if (HEADER_MODE === "origin") {
+        headers["Referer"] = `${origin}/`;
+        headers["Origin"] = origin;
+      } else if (HEADER_MODE === "link") {
+        headers["Referer"] = link;
+        headers["Origin"] = origin;
+      }
     }
   } catch (e) {
     // ignore
@@ -348,14 +309,30 @@ function buildHeadersForLink(link) {
 }
 
 async function loadDetail(link) {
-  const videoUrl = safeString(link);
+  let videoUrl = safeString(link);
+  
+  // 【播放防闪退核心】清洗直播 URL
+  // 拦截形如 http://xxx.m3u8|User-Agent=xxx 的非法链接格式，防止 Native 播放器解析器崩溃
+  if (videoUrl.includes('|')) {
+    videoUrl = videoUrl.split('|')[0];
+  }
+
+  // 确保基础的 URI 编码，避免中文路径或特殊符号干崩底层 C++
+  try {
+    videoUrl = encodeURI(decodeURI(videoUrl));
+  } catch (e) {
+    // ignore
+  }
+
   const headers = buildHeadersForLink(videoUrl);
+
   return {
-    id: videoUrl,
+    id: safeString(link), // 保持原始 ID 不变，防止匹配异常
     type: "detail",
     videoUrl: videoUrl,
     customHeaders: headers,
-    playerType: "system",
+    // 【重要修改】强制指定高兼容性内核
+    playerType: "ijk",
     childItems: []
   };
 }
